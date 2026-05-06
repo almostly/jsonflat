@@ -1,11 +1,15 @@
 """Tests for the ``jsonflat`` CLI."""
 
 from __future__ import annotations
+import io
 
 import json
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+
+import jsonflat.__main__ as cli_main
 
 
 def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -143,3 +147,84 @@ def test_cli_machine_readable_conflicts_with_format() -> None:
     result = _run(["--machine-readable", "--format", "json"], stdin=json.dumps({"x": 1}))
     assert result.returncode != 0
     assert "--machine-readable cannot be combined with --format" in result.stderr
+
+
+def test_module_main_summary_mode(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Running main() without --format prints a human-readable summary."""
+    monkeypatch.setattr(sys, "argv", ["jsonflat"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"order_id": "A1"})))
+    cli_main.main()
+    out = capsys.readouterr().out
+    assert "main: 1 rows" in out
+
+
+def test_module_main_machine_readable_to_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """main() writes machine-readable metadata JSON when requested."""
+    out_path = tmp_path / "meta.json"
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--machine-readable", "--output", str(out_path)])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"order_id": "A1"})))
+    cli_main.main()
+    payload = json.loads(out_path.read_text())
+    assert payload["tables"]["main"]["rows"] == 1
+
+
+def test_module_main_json_single_table(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """main() emits a JSON array when --format json and --table are used."""
+    data = {"order_id": "A1", "items": [{"sku": "W1"}, {"sku": "G1"}]}
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--format", "json", "--table", "items"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    cli_main.main()
+    out = json.loads(capsys.readouterr().out)
+    assert isinstance(out, list)
+    assert len(out) == 2
+    assert out[0]["sku"] == "W1"
+
+
+def test_module_main_csv_selected_table(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """main() emits CSV for the selected table."""
+    data = {"order_id": "A1", "items": [{"sku": "W1"}, {"sku": "G1"}]}
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--format", "csv", "--table", "items"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    cli_main.main()
+    lines = [line for line in capsys.readouterr().out.strip().splitlines() if line]
+    assert lines[0] == "sku"
+    assert lines[1:] == ["W1", "G1"]
+
+
+def test_module_main_parquet_path_invokes_emitter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """main() dispatches to parquet emitter with selected rows and output path."""
+    called: dict[str, object] = {}
+
+    def fake_emit_parquet(rows: list[dict[str, object]], output_path: str) -> None:
+        called["rows"] = rows
+        called["output_path"] = output_path
+
+    out_path = tmp_path / "items.parquet"
+    data = {"order_id": "A1", "items": [{"sku": "W1"}]}
+    monkeypatch.setattr(cli_main, "_emit_parquet", fake_emit_parquet)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["jsonflat", "--format", "parquet", "--table", "items", "--output", str(out_path)],
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    cli_main.main()
+    assert called["output_path"] == str(out_path)
+    assert called["rows"] == [{"sku": "W1"}]
+
+
+def test_module_main_validation_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid argument combinations fail with SystemExit."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"x": 1})))
+
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--machine-readable", "--format", "json"])
+    with pytest.raises(SystemExit):
+        cli_main.main()
+
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--output", "out.json"])
+    with pytest.raises(SystemExit):
+        cli_main.main()
+
+    monkeypatch.setattr(sys, "argv", ["jsonflat", "--format", "parquet"])
+    with pytest.raises(SystemExit):
+        cli_main.main()
