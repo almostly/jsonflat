@@ -9,13 +9,13 @@ from unittest.mock import patch
 import jsonflat
 
 
-def test_version_is_populated():
+def test_version_is_populated() -> None:
     """With the package installed, __version__ is the real metadata version."""
     assert jsonflat.__version__
     assert jsonflat.__version__ != "0.0.0+unknown"
 
 
-def test_version_falls_back_when_metadata_missing():
+def test_version_falls_back_when_metadata_missing() -> None:
     """When metadata lookup raises, __version__ falls back to the sentinel."""
     with patch("importlib.metadata.version", side_effect=PackageNotFoundError):
         reloaded = importlib.reload(jsonflat)

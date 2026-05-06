@@ -91,7 +91,7 @@ class TestFlatten:
 
     def test_empty_list_stays_as_value(self) -> None:
         """An empty list is kept as a plain value."""
-        row: dict[str, list] = {"items": []}
+        row: dict[str, list[object]] = {"items": []}
         result = flatten(row)
         assert result == {"items": []}
 

@@ -124,7 +124,7 @@ class TestAio:
         """Decorated async function runs over every item and returns results."""
 
         @aio(workers=4)
-        async def double(x):
+        async def double(x: int) -> int:
             return x * 2
 
         assert double([1, 2, 3]) == [2, 4, 6]
@@ -133,7 +133,7 @@ class TestAio:
         """Results are returned in input order even when coroutines finish out of order."""
 
         @aio(workers=4)
-        async def slow_first(x):
+        async def slow_first(x: int) -> int:
             if x == 0:
                 await asyncio.sleep(0.05)
             return x
@@ -144,18 +144,18 @@ class TestAio:
         """Pool context manager is opened once and injected as the second argument."""
 
         class FakeClient:
-            async def compute(self, x):
+            async def compute(self, x: int) -> int:
                 return x + 10
 
         class FakePool:
-            async def __aenter__(self):
+            async def __aenter__(self) -> FakeClient:
                 return FakeClient()
 
-            async def __aexit__(self, *_):
-                pass
+            async def __aexit__(self, *_: object) -> None:
+                return None
 
         @aio(workers=4, pool=FakePool)
-        async def fetch(x, client):
+        async def fetch(x: int, client: FakeClient) -> int:
             return await client.compute(x)
 
         assert fetch([1, 2, 3]) == [11, 12, 13]
@@ -164,7 +164,7 @@ class TestAio:
         """Empty input returns an empty list without error."""
 
         @aio(workers=4)
-        async def noop(x):
+        async def noop(x: int) -> int:
             return x
 
         assert noop([]) == []

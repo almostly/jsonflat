@@ -1,12 +1,13 @@
 """Tests for the ``jsonflat`` CLI."""
 
 from __future__ import annotations
-import io
 
+import io
 import json
 import subprocess
 import sys
 from pathlib import Path
+
 import pytest
 
 import jsonflat.__main__ as cli_main
