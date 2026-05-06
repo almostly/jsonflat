@@ -176,11 +176,25 @@ results = process(items)
 ### CLI
 
 ```bash
-# From file
+# Human-readable table summary from file
 jsonflat data.json --nesting 3
-
-# From stdin
+# Human-readable table summary from stdin
 cat data.json | jsonflat --nesting 3
+
+# Select a single table
+jsonflat data.json --table items
+
+# Export as JSON (all tables by default)
+jsonflat data.json --format json
+
+# Export one table as CSV to stdout
+jsonflat data.json --format csv --table items
+
+# Export one table as Parquet (requires output path)
+jsonflat data.json --format parquet --table items --output items.parquet
+
+# Machine-readable summary metadata for automation
+jsonflat data.json --machine-readable
 ```
 
 ## Integrations
