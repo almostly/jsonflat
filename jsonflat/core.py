@@ -218,6 +218,8 @@ def normalize_json(
                 if isinstance(v, list) and v and isinstance(v[0], dict):
                     for item in v:
                         row = flatten(item, max_nesting, on_collision="warn")
+                        if serialize_remaining:
+                            row = {k: _json.dumps(w) if isinstance(w, dict | list) else w for k, w in row.items()}
                         row[id_col] = hoist_id
                         tables.setdefault(child_key.replace("__", separator), []).append(row)
                 else:
@@ -228,7 +230,7 @@ def normalize_json(
                 flat[k] = v
 
         if serialize_remaining:
-            flat = {k: _json.dumps(v) if isinstance(v, dict | list) else v for k, v in flat.items()}
+            flat = {k: _json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in flat.items()}
 
         tables[root_name].append(flat)
 
@@ -242,7 +244,9 @@ def normalize_json(
             for item in list_items:
                 child_flat = flatten(item, child_nesting, on_collision="warn")
                 if serialize_remaining:
-                    child_flat = {k: _json.dumps(v) if isinstance(v, dict | list) else v for k, v in child_flat.items()}
+                    child_flat = {
+                        k: _json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in child_flat.items()
+                    }
                 if key and parent_key_value is not None:
                     if key in child_flat:
                         if child_flat[key] != parent_key_value:

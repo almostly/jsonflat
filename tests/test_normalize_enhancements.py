@@ -175,3 +175,40 @@ class TestPropagateKeys:
         }
         result = normalize_json(data, propagate_keys=["request_id"])
         assert result["items"][0]["request_id"] == "req-1"
+
+    def test_propagate_keys_not_applied_to_hoist_tables(self) -> None:
+        # Hoisted child tables are built mid-loop before flat is complete,
+        # so propagate_keys does not apply to them — document this boundary.
+        data = {
+            "request_id": "req-1",
+            "loans": {"loan-A": {"amount": 500}, "loan-B": {"amount": 800}},
+        }
+        result = normalize_json(data, hoist=[("loans", "loan_id")], propagate_keys=["request_id"])
+        for row in result["loans"]:
+            assert "request_id" not in row
+
+
+# -------------------------------------------------------------------------------
+# 5. serialize_remaining — hoist branch
+# -------------------------------------------------------------------------------
+class TestSerializeRemainingHoist:
+    def test_hoist_child_rows_serialized(self) -> None:
+        # outer flatten (max_nesting=1): loan-A list stored as blob → hoist picks it up
+        # inner flatten (max_nesting=1): attrs__x = {"y": 1} (dict blob) → serialize_remaining dumps it
+        data = {
+            "id": "x1",
+            "loans": {"loan-A": [{"amount": 500, "attrs": {"x": {"y": 1}}}]},
+        }
+        result = normalize_json(data, max_nesting=1, hoist=[("loans", "loan_id")], serialize_remaining=True)
+        row = result["loans"][0]
+        assert isinstance(row["attrs__x"], str)
+        assert json.loads(row["attrs__x"]) == {"y": 1}
+
+    def test_hoist_child_rows_not_serialized_by_default(self) -> None:
+        data = {
+            "id": "x1",
+            "loans": {"loan-A": [{"amount": 500, "attrs": {"x": {"y": 1}}}]},
+        }
+        result = normalize_json(data, max_nesting=1, hoist=[("loans", "loan_id")], serialize_remaining=False)
+        row = result["loans"][0]
+        assert isinstance(row["attrs__x"], dict)
