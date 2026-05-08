@@ -186,6 +186,8 @@ class TestPropagateKeys:
         result = normalize_json(data, hoist=[("loans", "loan_id")], propagate_keys=["request_id"])
         for row in result["loans"]:
             assert "request_id" not in row
+        # main table still gets request_id as a normal flat field
+        assert result["main"][0]["request_id"] == "req-1"
 
 
 # -------------------------------------------------------------------------------
@@ -201,6 +203,7 @@ class TestSerializeRemainingHoist:
         }
         result = normalize_json(data, max_nesting=1, hoist=[("loans", "loan_id")], serialize_remaining=True)
         row = result["loans"][0]
+        assert row["loan_id"] == "loan-A"
         assert isinstance(row["attrs__x"], str)
         assert json.loads(row["attrs__x"]) == {"y": 1}
 
