@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json as _json
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -87,32 +88,49 @@ def aio(
 def flatten(
     row: dict[str, Any],
     max_nesting: int | None = 3,
+    separator: str = "__",
+    on_collision: Literal["raise", "warn", "ignore"] = "raise",
     _depth: int = 0,
     _path: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Flatten a nested dict into a single-level dict with __ separators.
+    """Flatten a nested dict into a single-level dict.
 
     :param row: nested dict to flatten
     :param max_nesting: max depth before storing as JSON blob (None = unlimited)
+    :param separator: string used to join path segments (default ``"__"``);
+        use ``"."`` to get dot-notation keys like ``pandas.json_normalize``
+    :param on_collision: what to do when two paths resolve to the same key —
+        ``"raise"`` (default) raises ``ValueError``; ``"warn"`` emits a warning
+        and keeps the first value; ``"ignore"`` keeps the first value silently.
     :param _depth: current recursion depth (internal)
     :param _path: current key path (internal)
-    :returns: flat dict with __ separated keys; nested dicts/lists beyond max_nesting are preserved as-is
+    :returns: flat dict with separator-joined keys; nested dicts/lists beyond max_nesting are preserved as-is
     """
     flat: dict[str, Any] = {}
     stop = max_nesting is not None and _depth >= max_nesting
 
     for k, v in row.items():
-        key = "__".join((*_path, k)) if _path else k
+        key = separator.join((*_path, k)) if _path else k
 
         if isinstance(v, dict) and not stop:
-            for sk, sv in flatten(v, max_nesting, _depth + 1, (*_path, k)).items():
+            for sk, sv in flatten(v, max_nesting, separator, on_collision, _depth + 1, (*_path, k)).items():
                 if sk in flat:
-                    raise ValueError(
-                        f"Key collision on '{sk}': a native key contains '__' that conflicts with a nested path"
-                    )
-                flat[sk] = sv
+                    if on_collision == "raise":
+                        raise ValueError(
+                            f"Key collision on '{sk}': a native key contains {separator!r} "
+                            "that conflicts with a nested path"
+                        )
+                    if on_collision == "warn":
+                        warnings.warn(f"flatten: duplicate key '{sk}' dropped (kept first)", stacklevel=2)
+                else:
+                    flat[sk] = sv
         elif key in flat:
-            raise ValueError(f"Key collision on '{key}': a native key contains '__' that conflicts with a nested path")
+            if on_collision == "raise":
+                raise ValueError(
+                    f"Key collision on '{key}': a native key contains {separator!r} that conflicts with a nested path"
+                )
+            if on_collision == "warn":
+                warnings.warn(f"flatten: duplicate key '{key}' dropped (kept first)", stacklevel=2)
         else:
             flat[key] = v
 
@@ -153,6 +171,8 @@ def normalize_json(
     separator: str = ".",
     key: str | None = None,
     hoist: list[str | tuple[str, str]] | None = None,
+    serialize_remaining: bool = False,
+    propagate_keys: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Normalize JSON into parent + child tables.
 
@@ -164,6 +184,12 @@ def normalize_json(
     :param hoist: prefixes where dict keys are IDs — hoisted as row values instead of table name segments.
                   Each entry is a string (uses ``{prefix}_id``) or a ``(prefix, id_col)`` tuple.
                   e.g. ``hoist=["loans"]`` → ``loans_id`` column; ``hoist=[("loans", "loan_id")]`` → ``loan_id``
+    :param serialize_remaining: when ``True``, any dict/list values left un-flattened at ``max_nesting``
+        depth are serialized to JSON strings instead of stored as Python objects.
+        Prevents Parquet/PyArrow write failures without a separate sanitize step.
+    :param propagate_keys: extra scalar fields from the parent row to stamp onto every child row,
+        in addition to ``key``. Useful for multi-level FK propagation, e.g.
+        ``propagate_keys=["request_id"]`` when ``key="mambu_loan_id"``.
     :returns: dict mapping table_name → list of row dicts
     """
     if isinstance(data, dict):
@@ -183,7 +209,7 @@ def normalize_json(
         flat: dict[str, Any] = {}
         lists: dict[str, list[dict[str, Any]]] = {}
 
-        for k, v in flatten(record, max_nesting).items():
+        for k, v in flatten(record, max_nesting, on_collision="warn").items():
             parts = k.split("__")
             if hoist_map and parts[0] in hoist_map and len(parts) >= 2:
                 hoist_name, hoist_id, *rest = parts
@@ -191,7 +217,7 @@ def normalize_json(
                 child_key = "__".join([hoist_name, *rest]) if rest else hoist_name
                 if isinstance(v, list) and v and isinstance(v[0], dict):
                     for item in v:
-                        row = flatten(item, max_nesting)
+                        row = flatten(item, max_nesting, on_collision="warn")
                         row[id_col] = hoist_id
                         tables.setdefault(child_key.replace("__", separator), []).append(row)
                 else:
@@ -200,6 +226,9 @@ def normalize_json(
                 lists[k] = v
             else:
                 flat[k] = v
+
+        if serialize_remaining:
+            flat = {k: _json.dumps(v) if isinstance(v, dict | list) else v for k, v in flat.items()}
 
         tables[root_name].append(flat)
 
@@ -211,7 +240,9 @@ def normalize_json(
             child_name = list_key.replace("__", separator)
             child_nesting = None if max_nesting is None else max(max_nesting - list_key.count("__") - 1, 0)
             for item in list_items:
-                child_flat = flatten(item, child_nesting)
+                child_flat = flatten(item, child_nesting, on_collision="warn")
+                if serialize_remaining:
+                    child_flat = {k: _json.dumps(v) if isinstance(v, dict | list) else v for k, v in child_flat.items()}
                 if key and parent_key_value is not None:
                     if key in child_flat:
                         if child_flat[key] != parent_key_value:
@@ -226,6 +257,9 @@ def normalize_json(
                         )
                     else:
                         child_flat[key] = parent_key_value
+                for pk in propagate_keys or []:
+                    if pk not in child_flat and pk in flat:
+                        child_flat[pk] = flat[pk]
                 tables.setdefault(child_name, []).append(child_flat)
 
     return tables
