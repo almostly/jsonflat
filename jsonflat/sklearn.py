@@ -52,6 +52,7 @@ class JsonFlattener(BaseEstimator, TransformerMixin):
         on: str | None = None,
         how: Literal["left", "right", "outer", "inner", "cross"] = "left",
     ) -> None:
+        """Initialize JsonFlatTransformer."""
         self.max_nesting = max_nesting
         self.column = column
         self.table = table
