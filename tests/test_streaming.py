@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -18,9 +19,10 @@ def _aggregate(stream: Iterator[tuple[str, dict[str, Any]]]) -> dict[str, list[d
     return dict(out)
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Basic behaviour
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def test_stream_yields_tuples() -> None:
     records = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
@@ -60,9 +62,10 @@ def test_stream_is_lazy_until_consumed() -> None:
     assert consumed == [0, 1]
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Equivalence with batch normalize_json
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def test_stream_aggregate_matches_batch_simple() -> None:
     records = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
@@ -108,9 +111,7 @@ def test_stream_aggregate_matches_batch_with_propagate_keys() -> None:
             "items": [{"sku": "z"}],
         },
     ]
-    streamed = _aggregate(
-        normalize_json.stream(records, key="loan_id", propagate_keys=["request_id"])
-    )
+    streamed = _aggregate(normalize_json.stream(records, key="loan_id", propagate_keys=["request_id"]))
     batch = normalize_json(records, key="loan_id", propagate_keys=["request_id"])
     assert streamed == batch
 
@@ -120,16 +121,15 @@ def test_stream_aggregate_matches_batch_with_serialize_remaining() -> None:
         {"id": 1, "meta": {"a": {"b": {"c": "deep"}}}},
         {"id": 2, "meta": {"a": {"b": {"c": "deeper"}}}},
     ]
-    streamed = _aggregate(
-        normalize_json.stream(records, max_nesting=2, serialize_remaining=True)
-    )
+    streamed = _aggregate(normalize_json.stream(records, max_nesting=2, serialize_remaining=True))
     batch = normalize_json(records, max_nesting=2, serialize_remaining=True)
     assert streamed == batch
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # kwarg forwarding
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def test_stream_forwards_max_nesting() -> None:
     records = [{"id": 1, "deep": {"a": {"b": {"c": 1}}}}]
@@ -150,9 +150,10 @@ def test_stream_forwards_separator() -> None:
     assert "items" in table_names
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Error propagation
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def test_stream_raises_when_key_missing() -> None:
     records = [{"items": [{"sku": "x"}]}]
