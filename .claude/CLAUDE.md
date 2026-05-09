@@ -42,3 +42,9 @@ f"value=   {var}"
 f"    {var}"
 f"{var} "
 ```
+
+## Type checking
+
+Never use `# type: ignore` (or any of its variants). If the type checker complains, change the design until the types are honest.
+
+`# type: ignore` is never the answer in this codebase.

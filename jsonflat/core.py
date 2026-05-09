@@ -15,7 +15,7 @@ import asyncio
 import functools
 import json as _json
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
@@ -168,107 +168,149 @@ def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     return {k: _json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in row.items()}
 
 
-def normalize_json(
-    data: dict[str, Any] | list[dict[str, Any]] | Any,
-    max_nesting: int | None = 3,
-    root_name: str = "main",
-    separator: str = ".",
-    key: str | None = None,
-    hoist: list[str | tuple[str, str]] | None = None,
-    serialize_remaining: bool = False,
-    propagate_keys: list[str] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Normalize JSON into parent + child tables.
+class _Normalizer:
+    """Normalize nested JSON into parent + child tables.
 
-    :param data: single record or list of records
-    :param max_nesting: max depth before storing as JSON blob (None = unlimited)
-    :param root_name: name for the root table
-    :param separator: separator for child table names (e.g. ``"."`` → ``"policy_output.offers"``)
-    :param key: field to copy from each parent into child rows as a foreign key
-    :param hoist: prefixes where dict keys are IDs — hoisted as row values instead of table name segments.
-                  Each entry is a string (uses ``{prefix}_id``) or a ``(prefix, id_col)`` tuple.
-                  e.g. ``hoist=["loans"]`` → ``loans_id`` column; ``hoist=[("loans", "loan_id")]`` → ``loan_id``
-    :param serialize_remaining: when ``True``, any dict/list values left un-flattened at ``max_nesting``
-        depth are serialized to JSON strings instead of stored as Python objects.
-        Prevents Parquet/PyArrow write failures without a separate sanitize step.
-    :param propagate_keys: extra scalar fields from the parent row to stamp onto every child row,
-        in addition to ``key``. Useful for multi-level FK propagation, e.g.
-        ``propagate_keys=["request_id"]`` when ``key="mambu_loan_id"``.
-    :returns: dict mapping table_name → list of row dicts
+    Exposes two entry points with the same keyword arguments:
+
+    - ``__call__(data, **kwargs)`` — batch mode, returns the full
+      ``dict[table_name, list[row]]``.
+    - ``stream(records, **kwargs)`` — streaming mode, yields ``(table_name, row)``
+      tuples one record at a time so memory stays bounded for large inputs
+      (JSONL files, Kinesis batches, DynamoDB scans, S3 manifests).
+
+    ``stream`` is a thin loop around ``__call__``; per-record overhead is
+    negligible compared to the flatten work itself.
     """
-    if isinstance(data, dict):
-        data = [data]
 
-    hoist_map: dict[str, str] = {}
-    for entry in hoist or []:
-        if isinstance(entry, tuple):
-            prefix, id_col_name = entry
-        else:
-            prefix, id_col_name = entry, f"{entry}_id"
-        hoist_map[prefix] = id_col_name
+    def __call__(
+        self,
+        data: dict[str, Any] | list[dict[str, Any]] | Any,
+        max_nesting: int | None = 3,
+        root_name: str = "main",
+        separator: str = ".",
+        key: str | None = None,
+        hoist: list[str | tuple[str, str]] | None = None,
+        serialize_remaining: bool = False,
+        propagate_keys: list[str] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Normalize JSON into parent + child tables.
 
-    tables: dict[str, list[dict[str, Any]]] = {root_name: []}
+        :param data: single record or list of records
+        :param max_nesting: max depth before storing as JSON blob (None = unlimited)
+        :param root_name: name for the root table
+        :param separator: separator for child table names (e.g. ``"."`` → ``"policy_output.offers"``)
+        :param key: field to copy from each parent into child rows as a foreign key
+        :param hoist: prefixes where dict keys are IDs — hoisted as row values instead of table name segments.
+                      Each entry is a string (uses ``{prefix}_id``) or a ``(prefix, id_col)`` tuple.
+                      e.g. ``hoist=["loans"]`` → ``loans_id`` column; ``hoist=[("loans", "loan_id")]`` → ``loan_id``
+        :param serialize_remaining: when ``True``, any dict/list values left un-flattened at ``max_nesting``
+            depth are serialized to JSON strings instead of stored as Python objects.
+            Prevents Parquet/PyArrow write failures without a separate sanitize step.
+        :param propagate_keys: extra scalar fields from the parent row to stamp onto every child row,
+            in addition to ``key``. Useful for multi-level FK propagation, e.g.
+            ``propagate_keys=["request_id"]`` when ``key="mambu_loan_id"``.
+        :returns: dict mapping table_name → list of row dicts
+        """
+        if isinstance(data, dict):
+            data = [data]
 
-    for record in data:
-        flat: dict[str, Any] = {}
-        lists: dict[str, list[dict[str, Any]]] = {}
-
-        for k, v in flatten(record, max_nesting, on_collision="warn").items():
-            parts = k.split("__")
-            if hoist_map and parts[0] in hoist_map and len(parts) >= 2:
-                hoist_name, hoist_id, *rest = parts
-                id_col = hoist_map[hoist_name]
-                child_key = "__".join([hoist_name, *rest]) if rest else hoist_name
-                if isinstance(v, list) and v and isinstance(v[0], dict):
-                    for item in v:
-                        row = flatten(item, max_nesting, on_collision="warn")
-                        if serialize_remaining:
-                            row = _serialize_row(row)
-                        row[id_col] = hoist_id
-                        tables.setdefault(child_key.replace("__", separator), []).append(row)
-                else:
-                    tables.setdefault(hoist_name, []).append({id_col: hoist_id, "value": v})
-            elif isinstance(v, list) and v and isinstance(v[0], dict):
-                lists[k] = v
+        hoist_map: dict[str, str] = {}
+        for entry in hoist or []:
+            if isinstance(entry, tuple):
+                prefix, id_col_name = entry
             else:
-                flat[k] = v
+                prefix, id_col_name = entry, f"{entry}_id"
+            hoist_map[prefix] = id_col_name
 
-        if serialize_remaining:
-            flat = _serialize_row(flat)
+        tables: dict[str, list[dict[str, Any]]] = {root_name: []}
 
-        tables[root_name].append(flat)
+        for record in data:
+            flat: dict[str, Any] = {}
+            lists: dict[str, list[dict[str, Any]]] = {}
 
-        if key and key not in flat:
-            raise KeyError(f"Key '{key}' not found in record. Available keys: {list(flat.keys())}")
-        parent_key_value = flat.get(key) if key else None
-
-        for list_key, list_items in lists.items():
-            child_name = list_key.replace("__", separator)
-            child_nesting = None if max_nesting is None else max(max_nesting - list_key.count("__") - 1, 0)
-            for item in list_items:
-                child_flat = flatten(item, child_nesting, on_collision="warn")
-                if serialize_remaining:
-                    child_flat = _serialize_row(child_flat)
-                if key and parent_key_value is not None:
-                    if key in child_flat:
-                        if child_flat[key] != parent_key_value:
-                            raise ValueError(
-                                f"Key '{key}' already exists in child table '{child_name}' with a different value "
-                                f"({child_flat[key]!r} vs parent {parent_key_value!r})."
-                            )
-                        warnings.warn(
-                            f"Key '{key}' already exists in child table '{child_name}' "
-                            "with the same value (skipping overwrite).",
-                            stacklevel=2,
-                        )
+            for k, v in flatten(record, max_nesting, on_collision="warn").items():
+                parts = k.split("__")
+                if hoist_map and parts[0] in hoist_map and len(parts) >= 2:
+                    hoist_name, hoist_id, *rest = parts
+                    id_col = hoist_map[hoist_name]
+                    child_key = "__".join([hoist_name, *rest]) if rest else hoist_name
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        for item in v:
+                            row = flatten(item, max_nesting, on_collision="warn")
+                            if serialize_remaining:
+                                row = _serialize_row(row)
+                            row[id_col] = hoist_id
+                            tables.setdefault(child_key.replace("__", separator), []).append(row)
                     else:
-                        child_flat[key] = parent_key_value
-                for pk in propagate_keys or []:
-                    if pk not in child_flat and pk in flat:
-                        child_flat[pk] = flat[pk]
-                tables.setdefault(child_name, []).append(child_flat)
+                        tables.setdefault(hoist_name, []).append({id_col: hoist_id, "value": v})
+                elif isinstance(v, list) and v and isinstance(v[0], dict):
+                    lists[k] = v
+                else:
+                    flat[k] = v
 
-    return tables
+            if serialize_remaining:
+                flat = _serialize_row(flat)
+
+            tables[root_name].append(flat)
+
+            if key and key not in flat:
+                raise KeyError(f"Key '{key}' not found in record. Available keys: {list(flat.keys())}")
+            parent_key_value = flat.get(key) if key else None
+
+            for list_key, list_items in lists.items():
+                child_name = list_key.replace("__", separator)
+                child_nesting = None if max_nesting is None else max(max_nesting - list_key.count("__") - 1, 0)
+                for item in list_items:
+                    child_flat = flatten(item, child_nesting, on_collision="warn")
+                    if serialize_remaining:
+                        child_flat = _serialize_row(child_flat)
+                    if key and parent_key_value is not None:
+                        if key in child_flat:
+                            if child_flat[key] != parent_key_value:
+                                raise ValueError(
+                                    f"Key '{key}' already exists in child table '{child_name}' with a different value "
+                                    f"({child_flat[key]!r} vs parent {parent_key_value!r})."
+                                )
+                            warnings.warn(
+                                f"Key '{key}' already exists in child table '{child_name}' "
+                                "with the same value (skipping overwrite).",
+                                stacklevel=2,
+                            )
+                        else:
+                            child_flat[key] = parent_key_value
+                    for pk in propagate_keys or []:
+                        if pk not in child_flat and pk in flat:
+                            child_flat[pk] = flat[pk]
+                    tables.setdefault(child_name, []).append(child_flat)
+
+        return tables
+
+    def stream(
+        self,
+        records: Iterable[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Stream records through ``__call__`` and yield ``(table_name, row)`` tuples.
+
+        ``**kwargs`` are forwarded to ``__call__`` (``max_nesting``, ``root_name``,
+        ``separator``, ``key``, ``hoist``, ``serialize_remaining``, ``propagate_keys``).
+
+        Each record's tables are yielded entirely before the next record is consumed,
+        so downstream writers can flush per-record without buffering the full output.
+        Errors raised by ``__call__`` (e.g. missing ``key``) propagate immediately —
+        partial output may have been emitted before the exception.
+
+        :param records: iterable of records (one dict per record)
+        :returns: generator yielding ``(table_name, row)`` tuples
+        """
+        for record in records:
+            for table_name, rows in self(record, **kwargs).items():
+                for row in rows:
+                    yield table_name, row
+
+
+normalize_json = _Normalizer()
 
 
 def to_dataframe(
