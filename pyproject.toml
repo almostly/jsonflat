@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jsonflat"
-version = "0.0.4a1"
+version = "0.0.4a2"
 description = "Flatten nested JSON into DataFrames with controlled depth."
 readme = "README.md"
 requires-python = ">=3.9"
