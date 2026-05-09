@@ -1,10 +1,9 @@
-"""Tests for ``normalize_json.stream`` and ``normalize_json.astream`` — record-by-record streaming."""
+"""Tests for ``normalize_json.stream`` — record-by-record streaming."""
 
 from __future__ import annotations
 
-import asyncio
 from collections import defaultdict
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, Iterator
 
 import pytest
 
@@ -173,105 +172,3 @@ def test_stream_partial_output_visible_before_error() -> None:
         for pair in iterator:
             consumed.append(pair)
     assert ("main", {"id": 1}) in consumed
-
-
-#-------------------------------------------------------------------------------
-# Async streaming (astream)
-#-------------------------------------------------------------------------------
-
-async def _as_async(records: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
-    for record in records:
-        yield record
-
-
-async def _drain_async(
-    stream: AsyncIterator[tuple[str, dict[str, Any]]],
-) -> list[tuple[str, dict[str, Any]]]:
-    return [pair async for pair in stream]
-
-
-def _run(coro: Any) -> Any:
-    return asyncio.run(coro)
-
-
-def test_astream_yields_tuples() -> None:
-    async def go() -> list[tuple[str, dict[str, Any]]]:
-        records = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
-        return await _drain_async(normalize_json.astream(_as_async(records)))
-
-    assert _run(go()) == [
-        ("main", {"id": 1, "name": "a"}),
-        ("main", {"id": 2, "name": "b"}),
-    ]
-
-
-def test_astream_empty_input_yields_nothing() -> None:
-    async def go() -> list[tuple[str, dict[str, Any]]]:
-        return await _drain_async(normalize_json.astream(_as_async([])))
-
-    assert _run(go()) == []
-
-
-def test_astream_aggregate_matches_batch_with_children() -> None:
-    records = [
-        {"id": 1, "items": [{"sku": "x"}, {"sku": "y"}]},
-        {"id": 2, "items": [{"sku": "z"}]},
-    ]
-
-    async def go() -> dict[str, list[dict[str, Any]]]:
-        out: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        async for table_name, row in normalize_json.astream(_as_async(records), key="id"):
-            out[table_name].append(row)
-        return dict(out)
-
-    assert _run(go()) == normalize_json(records, key="id")
-
-
-def test_astream_aggregate_matches_batch_with_hoist_and_propagate() -> None:
-    records = [
-        {
-            "request_id": "r1",
-            "loan_id": "L1",
-            "loans": {"L1": {"amount": 100}},
-            "items": [{"sku": "x"}],
-        },
-    ]
-    kwargs: dict[str, Any] = {"hoist": ["loans"], "key": "loan_id", "propagate_keys": ["request_id"]}
-
-    async def go() -> dict[str, list[dict[str, Any]]]:
-        out: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        async for table_name, row in normalize_json.astream(_as_async(records), **kwargs):
-            out[table_name].append(row)
-        return dict(out)
-
-    assert _run(go()) == normalize_json(records, **kwargs)
-
-
-def test_astream_is_lazy_until_consumed() -> None:
-    consumed: list[int] = []
-
-    async def gen() -> AsyncIterator[dict[str, Any]]:
-        for i in range(5):
-            consumed.append(i)
-            yield {"id": i}
-
-    async def go() -> None:
-        iterator = normalize_json.astream(gen())
-        assert consumed == []
-        await iterator.__anext__()
-        assert consumed == [0]
-        await iterator.__anext__()
-        assert consumed == [0, 1]
-        await iterator.aclose()
-
-    _run(go())
-
-
-def test_astream_raises_when_key_missing() -> None:
-    async def go() -> None:
-        records = [{"items": [{"sku": "x"}]}]
-        async for _ in normalize_json.astream(_as_async(records), key="id"):
-            pass
-
-    with pytest.raises(KeyError, match="Key 'id' not found"):
-        _run(go())

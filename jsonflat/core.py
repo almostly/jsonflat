@@ -15,7 +15,7 @@ import asyncio
 import functools
 import json as _json
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
@@ -171,17 +171,16 @@ def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
 class _Normalizer:
     """Normalize nested JSON into parent + child tables.
 
-    Exposes two entry points:
+    Exposes two entry points with the same keyword arguments:
 
     - ``__call__(data, **kwargs)`` — batch mode, returns the full
-      ``dict[table_name, list[row]]`` (existing behaviour).
+      ``dict[table_name, list[row]]``.
     - ``stream(records, **kwargs)`` — streaming mode, yields ``(table_name, row)``
       tuples one record at a time so memory stays bounded for large inputs
       (JSONL files, Kinesis batches, DynamoDB scans, S3 manifests).
 
-    Both modes accept the same keyword arguments. ``stream`` is a thin loop
-    around ``__call__``; per-record overhead is negligible compared to the
-    flatten work itself.
+    ``stream`` is a thin loop around ``__call__``; per-record overhead is
+    negligible compared to the flatten work itself.
     """
 
     def __call__(
@@ -306,30 +305,6 @@ class _Normalizer:
         :returns: generator yielding ``(table_name, row)`` tuples
         """
         for record in records:
-            for table_name, rows in self(record, **kwargs).items():
-                for row in rows:
-                    yield table_name, row
-
-    async def astream(
-        self,
-        records: AsyncIterable[dict[str, Any]],
-        **kwargs: Any,
-    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        """Async sibling of ``stream`` for async upstreams.
-
-        Drives an ``AsyncIterable[dict]`` (e.g. ``aioboto3`` paginator output, async
-        Kinesis consumer, ``aiofiles`` JSONL reader) through the sync ``__call__``
-        and yields ``(table_name, row)`` tuples one record at a time.
-
-        The flatten work itself is sync and runs on the event loop, so it briefly
-        blocks between yields. For typical JSON records (sub-millisecond per record)
-        this is fine; for very large records, wrap the call in
-        ``asyncio.to_thread`` at the call site.
-
-        :param records: async iterable of records (one dict per record)
-        :returns: async generator yielding ``(table_name, row)`` tuples
-        """
-        async for record in records:
             for table_name, rows in self(record, **kwargs).items():
                 for row in rows:
                     yield table_name, row
