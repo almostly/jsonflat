@@ -2,15 +2,16 @@
 
 ## Comment style for section dividers
 
-Use the 80-character dashed style — not Unicode box-drawing characters:
+Use the 80-character dashed style — not Unicode box-drawing characters.
+Note the space after `#`; this matches `ruff format`'s default and PEP 8.
 
 ```python
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Section name
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 ```
 
-No blank line between the closing `#---` line and the next code block.
+No blank line between the closing `# ---` line and the next code block.
 
 Do NOT use: `# ── Section ──────────────────────────────────────────────────────`
 
