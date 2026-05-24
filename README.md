@@ -1,7 +1,7 @@
 # jsonflat
 
 <p align="center">
-  <img src="ims/jsonflat.png" alt="jsonflat" width="900">
+  <img src="assets/jsonflat.jpg" alt="jsonflat" width="900">
 </p>
 
 **jsonflat** is a normalizer that handles the parent-child splitting automatically.
@@ -9,10 +9,10 @@
 ## Install
 
 ```bash
-uv add git+https://github.com/deburky/jsonflat.git        # core (stdlib only)
-uv add "git+https://github.com/deburky/jsonflat.git[dataframe]"  # + pandas
-uv add "git+https://github.com/deburky/jsonflat.git[s3-async]"   # + aioboto3/orjson for @aio with S3
-uv add "git+https://github.com/deburky/jsonflat.git[sklearn]"    # + scikit-learn for pipelines
+uv add git+https://github.com/almostly/jsonflat.git        # core (stdlib only)
+uv add "git+https://github.com/almostly/jsonflat.git[dataframe]"  # + pandas
+uv add "git+https://github.com/almostly/jsonflat.git[s3-async]"   # + aioboto3/orjson for @aio with S3
+uv add "git+https://github.com/almostly/jsonflat.git[sklearn]"    # + scikit-learn for pipelines
 ```
 
 ## Main functions
@@ -296,3 +296,11 @@ jsonflat/
 ```bash
 uv run pytest tests/ -v
 ```
+
+---
+
+<p align="center">
+  <a href="https://almostly.ai">
+    <img src="assets/almostly-badge.svg" alt="almostly.ai" width="160">
+  </a>
+</p>
