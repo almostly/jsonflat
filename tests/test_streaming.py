@@ -163,7 +163,7 @@ def test_stream_raises_when_key_missing() -> None:
 
 def test_stream_partial_output_visible_before_error() -> None:
     """A failing record's predecessors should already be yielded."""
-    records = [
+    records: list[dict[str, Any]] = [
         {"id": 1, "items": [{"sku": "x"}]},
         {"items": [{"sku": "y"}]},  # missing 'id', will raise
     ]
